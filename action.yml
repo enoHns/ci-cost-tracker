@@ -1,0 +1,38 @@
+name: 'ci-cost-tracker'
+description: 'Estimate and track the cost of your CI/CD pipeline runs'
+author: 'Hénoc HOUNSA'
+
+branding:
+  icon: 'dollar-sign'
+  color: 'green'
+
+inputs:
+  github-token:
+    description: 'GitHub token with actions:read permission'
+    required: true
+    default: ${{ github.token }}
+
+  cloud-provider:
+    description: 'Runner cost model: github | aws | gcp | azure'
+    required: false
+    default: 'github'
+
+  post-comment:
+    description: 'Post cost estimate as a PR comment'
+    required: false
+    default: 'true'
+
+  lookback-runs:
+    description: 'Number of past runs for monthly projection'
+    required: false
+    default: '30'
+
+outputs:
+  run-cost-usd:
+    description: 'Estimated cost of this run in USD'
+  monthly-projection-usd:
+    description: 'Projected monthly CI cost in USD'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
