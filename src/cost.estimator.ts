@@ -19,36 +19,28 @@ export async function estimateCost(
   })
 
   const jobs: JobCost[] = jobsData.jobs.map(job => {
-    const durationMs = job.completed_at && job.started_at
+    const durationMs  = job.completed_at && job.started_at
       ? new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()
       : 0
     const durationMin = durationMs / 60000
     const pricing     = getPricing(provider, job.labels?.[0] ?? 'ubuntu-latest')
     const costUsd     = Math.round(durationMin * pricing.pricePerMinute * 10000) / 10000
-
-    return {
-      jobName:    job.name,
-      runnerType: pricing.runnerLabel,
-      durationMin: Math.round(durationMin * 100) / 100,
-      costUsd,
-    }
+    return { jobName: job.name, runnerType: pricing.runnerLabel, durationMin: Math.round(durationMin * 100) / 100, costUsd }
   })
 
   const totalRunCostUsd = jobs.reduce((s, j) => s + j.costUsd, 0)
 
-  // Monthly projection based on historical runs
+  // Historical runs for average + projected cadence
   const { data: runsData } = await octokit.actions.listWorkflowRunsForRepo({
-    owner, repo,
-    per_page: Math.min(lookbackRuns, 100),
-    status: 'completed',
+    owner, repo, per_page: Math.min(lookbackRuns, 100), status: 'completed',
   })
 
+  const historicalRuns = runsData.workflow_runs.slice(0, 20)
+
   const historicalCosts = await Promise.all(
-    runsData.workflow_runs.slice(0, 20).map(async run => {
+    historicalRuns.map(async run => {
       try {
-        const { data: runJobs } = await octokit.actions.listJobsForWorkflowRun({
-          owner, repo, run_id: run.id,
-        })
+        const { data: runJobs } = await octokit.actions.listJobsForWorkflowRun({ owner, repo, run_id: run.id })
         return runJobs.jobs.reduce((sum, job) => {
           const ms  = job.completed_at && job.started_at
             ? new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()
@@ -57,29 +49,31 @@ export async function estimateCost(
           const p   = getPricing(provider, job.labels?.[0] ?? 'ubuntu-latest')
           return sum + min * p.pricePerMinute
         }, 0)
-      } catch {
-        return 0
-      }
+      } catch { return 0 }
     })
   )
 
   const avgRunCostUsd = historicalCosts.length
-    ? historicalCosts.reduce((s, c) => s + c, 0) / historicalCosts.length
+    ? historicalCosts.reduce((s, c) => s + c, 0) / historicalCosts.filter(c => c > 0).length
     : totalRunCostUsd
 
-  // Rough monthly projection: assume same run frequency as observed
-  const runsPerMonth = 30 * 8  // conservative: 8 runs/day
+  // Observed cadence: spread historical runs over their date range
+  let runsPerMonth = 60  // default fallback
+  if (historicalRuns.length >= 2) {
+    const oldest = new Date(historicalRuns[historicalRuns.length - 1].created_at).getTime()
+    const newest = new Date(historicalRuns[0].created_at).getTime()
+    const daysDiff = Math.max(1, (newest - oldest) / 86400000)
+    runsPerMonth = Math.round((historicalRuns.length / daysDiff) * 30)
+  }
+
   const monthlyProjectionUsd = Math.round(avgRunCostUsd * runsPerMonth * 100) / 100
 
-  core.info(`  Run cost: $${totalRunCostUsd.toFixed(4)} · Monthly projection: $${monthlyProjectionUsd.toFixed(2)}`)
+  core.info(`  Run cost: $${totalRunCostUsd.toFixed(4)} · ~${runsPerMonth} runs/month · Monthly: $${monthlyProjectionUsd.toFixed(2)}`)
 
   return {
-    runId: currentRunId,
-    jobs,
+    runId: currentRunId, jobs,
     totalRunCostUsd:      Math.round(totalRunCostUsd * 10000) / 10000,
     avgRunCostUsd:        Math.round(avgRunCostUsd * 10000) / 10000,
-    monthlyProjectionUsd,
-    provider,
-    analyzedRuns:         historicalCosts.length,
+    monthlyProjectionUsd, provider, analyzedRuns: historicalCosts.length,
   }
 }
