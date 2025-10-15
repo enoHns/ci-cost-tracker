@@ -1,6 +1,6 @@
 {
   "name": "ci-cost-tracker",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "GitHub Action — estimate and track CI/CD pipeline run costs",
   "main": "dist/index.js",
   "scripts": {
